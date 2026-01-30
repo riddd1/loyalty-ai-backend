@@ -15,177 +15,294 @@ app.use(express.json({ limit: '50mb' }));
 
 // Health check
 app.get('/', (req, res) => {
-  res.json({ status: 'Loyalty AI Backend Running' });
+  res.json({ status: 'Telr AI Backend Running' });
 });
 
-// Loyalty Test Endpoint
+// ========================================
+// CHAT ENDPOINT - Relationship Advice AI
+// ========================================
+app.post('/chat', async (req, res) => {
+  try {
+    const { messages } = req.body;
+
+    if (!messages || !Array.isArray(messages)) {
+      return res.status(400).json({ error: 'Messages array is required' });
+    }
+
+    const systemPrompt = `You are Telr AI, a compassionate and honest relationship advisor specializing in helping people who:
+- Suspect their partner is cheating
+- Are dealing with heartbreak and breakups
+- Need to identify red flags in their relationships
+- Want honest, no-BS advice about love and loyalty
+
+Your personality:
+- Empathetic but direct - you tell the truth even when it hurts
+- Supportive but realistic - you validate feelings while keeping them grounded
+- Street-smart about relationships - you know the signs and patterns
+- Non-judgmental - you never shame or blame the person asking for help
+- Use a warm, conversational tone like talking to a trusted friend
+
+When someone asks for advice:
+1. Acknowledge their feelings first ("I hear you, that must hurt")
+2. Ask clarifying questions if needed
+3. Give honest, practical advice based on common relationship patterns
+4. Point out red flags they might be missing
+5. Offer actionable next steps
+6. Remind them they deserve better if applicable
+
+Keep responses conversational, warm, and under 150 words unless they need more detail.
+
+If they're clearly being manipulated or gaslit, call it out gently but firmly.
+If they need to leave a toxic situation, encourage them with empathy.
+If they're overreacting, help them see perspective without dismissing their concerns.
+
+Examples of your tone:
+- User: "He never texts me first anymore"
+  You: "I hear you, and that hurts. When someone stops initiating, it usually means their interest is fading or they're getting attention elsewhere. Have you noticed any other changes? Like being protective of his phone or making excuses not to see you? Trust your gut here - if something feels off, it probably is."
+
+- User: "Should I check his phone?"
+  You: "Real talk - if you feel like you need to check his phone, the trust is already broken. That's the real issue. Either have an honest conversation about what's making you suspicious, or accept that this relationship might not be giving you the security you need. You deserve someone who makes you feel safe, not paranoid."`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4o',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        ...messages
+      ],
+      temperature: 0.8,
+      max_tokens: 500,
+    });
+
+    const reply = completion.choices[0].message.content;
+
+    res.json({ reply });
+  } catch (error) {
+    console.error('Chat error:', error);
+    res.status(500).json({ error: 'Failed to get response' });
+  }
+});
+
+// ========================================
+// LOYALTY TEST ENDPOINT - Flirty Messages
+// ========================================
 app.post('/loyalty-test', async (req, res) => {
   try {
     const { base64Image } = req.body;
 
-    const response = await openai.chat.completions.create({
+    if (!base64Image) {
+      return res.status(400).json({ error: 'Image is required' });
+    }
+
+    const systemPrompt = `You are Telr AI's loyalty test message generator. Your job is to create realistic, tempting messages that test if someone would be disloyal.
+
+Context: The user uploaded a screenshot of their partner's chat. Based on what you see, generate 4-5 flirty messages that gradually escalate to see if their partner would cross boundaries.
+
+Your messages should:
+- Match the conversation style and tone you see in the screenshot
+- Start subtle, then get progressively more direct
+- Sound natural and realistic (how people actually flirt via text)
+- Include emojis naturally but don't overdo it
+- Be short (under 20 words each)
+- Make it OBVIOUS if someone responds positively that they're being disloyal
+
+Escalation pattern:
+1. Subtle compliment or playful comment
+2. Hint at attraction or interest
+3. Suggest hanging out alone
+4. More direct flirting
+5. Clear boundary-crossing invitation
+
+Examples based on context:
+If they're talking to a coworker:
+- "You looked really good in that meeting today 😊"
+- "I can't focus when you're around tbh"
+- "We should grab drinks after work, just us"
+- "Your gf/bf doesn't need to know 😏"
+
+If they're talking to an ex:
+- "I've been thinking about us lately"
+- "Remember when we used to talk all night? I miss that"
+- "Are you happy? Really?"
+- "I think we made a mistake breaking up"
+
+Important rules:
+- Each message on its own line
+- NO numbering, NO bullet points
+- NO explanations, just the messages
+- Make them feel authentic to the specific conversation context
+- 4-5 messages total`;
+
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         {
           role: 'system',
-          content: `You generate messages for a girl testing her boyfriend's loyalty. Your goal is to get him to fall for her and slip up. Be OFFENSIVE, not defensive. Push boundaries naturally. Output ONLY the exact message(s)—nothing else.
-
-STRATEGY - BE OFFENSIVE:
-- Your job is to make HIM chase YOU
-- Be confident, flirty, and slightly challenging
-- Push the conversation forward toward him showing interest
-- Don't play it safe or be overly sweet
-- Make him want to impress you or pursue you
-- You can double text if it adds pressure or interest
-
-DOUBLE TEXTING:
-- You can send 2-3 messages in a row if it feels natural
-- Use it to add interest, push boundaries, or create urgency
-
-TONE - CONFIDENT & FLIRTY:
-- Be playful and teasing, not defensive
-- Show interest but don't apologize or backtrack
-- Push him to respond or engage more
-
-IF HE MENTIONS A GIRLFRIEND:
-- Don't immediately back off
-- Be casual about it, test if he's serious
-
-IF HE'S ENGAGED/FLIRTY:
-- Push harder, ask him out, suggest meeting
-- Make him make the move
-
-HARD LIMITS:
-❌ NO sexual/explicit content
-❌ NO being overly defensive or apologetic
-❌ Don't sound desperate or needy
-❌ Max 1-2 emojis per message
-❌ Sound confident and natural
-
-REMEMBER: Play OFFENSE. Make him want you. Push boundaries. Get him to slip.`,
+          content: systemPrompt
         },
         {
           role: 'user',
           content: [
             {
               type: 'text',
-              text: 'Generate message(s) to continue this interaction. You can send multiple messages (double text) if it feels natural. Output ONLY the message(s), nothing else.',
+              text: 'Based on this conversation screenshot, generate 4-5 realistic flirty messages to test loyalty. Return ONLY the messages, one per line, no formatting.'
             },
             {
               type: 'image_url',
               image_url: {
-                url: `data:image/jpeg;base64,${base64Image}`,
-              },
-            },
-          ],
-        },
+                url: `data:image/jpeg;base64,${base64Image}`
+              }
+            }
+          ]
+        }
       ],
+      temperature: 0.9,
+      max_tokens: 300,
     });
 
-    res.json({ reply: response.choices[0].message.content });
+    const reply = completion.choices[0].message.content;
+
+    res.json({ reply });
   } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Failed to generate response' });
+    console.error('Loyalty test error:', error);
+    res.status(500).json({ error: 'Failed to generate messages' });
   }
 });
 
-// Red Flag Detector Endpoint
+// ========================================
+// RED FLAG ENDPOINT - Chat Analysis
+// ========================================
 app.post('/red-flag', async (req, res) => {
   try {
     const { images } = req.body;
 
-    const imageContents = images.map((img) => ({
+    if (!images || !Array.isArray(images) || images.length === 0) {
+      return res.status(400).json({ error: 'At least one image is required' });
+    }
+
+    const systemPrompt = `You are Telr AI's relationship analyzer. You analyze chat screenshots to detect signs of cheating, lying, manipulation, and overall relationship health.
+
+Your job is to be a relationship detective - spot patterns that indicate problems.
+
+RED FLAGS TO LOOK FOR:
+- Emotional distance (short replies, no enthusiasm, no questions about their day)
+- Defensiveness ("Why are you asking?" "You're being paranoid")
+- Evasiveness (avoiding questions, changing subjects)
+- Gaslighting ("That never happened" "You're crazy" "You're too sensitive")
+- Suspicious timing (replies take hours, "busy" all the time, excuses)
+- Over-explaining simple things (sign of lying)
+- Secrecy (won't share details, vague about plans)
+- Communication changes (suddenly cold or overly nice)
+- Mentions new people without context
+- Making you feel guilty for having concerns
+- Love bombing after being distant
+- Breadcrumbing (keeping you on the hook but not committed)
+
+POSITIVE SIGNS TO LOOK FOR:
+- Consistent communication
+- Asks about your day and remembers details
+- Makes future plans together
+- Transparent about whereabouts
+- Introduces you to friends/family
+- Responds to important messages quickly
+- Shows emotional availability
+- Reassures you when you're worried
+
+SCORING GUIDELINES:
+- Compatibility Score (0-100):
+  * 80-100: Healthy, strong relationship
+  * 60-79: Some issues but overall good
+  * 40-59: Moderate problems, needs work
+  * 20-39: Major red flags, likely toxic
+  * 0-19: Severe issues, get out
+
+- Engagement Level (0-100):
+  * How enthusiastic are their responses?
+  * Do they ask questions back?
+  * How fast do they respond to important things?
+
+Return your analysis as a JSON object with this EXACT structure:
+
+{
+  "messageBalance": {
+    "you": <count user's messages>,
+    "them": <count partner's messages>
+  },
+  "engagementLevel": <0-100>,
+  "warningSignals": [
+    "<specific red flag with brief example from the chat>",
+    "<another red flag>"
+  ],
+  "positiveSignals": [
+    "<specific positive sign with example>",
+    "<another positive sign>"
+  ],
+  "compatibilityScore": <0-100>
+}
+
+IMPORTANT:
+- Be brutally honest - if you see cheating signs, say it
+- If the relationship looks healthy, celebrate it
+- Give 2-4 items in each array
+- Base scores on actual chat content
+- Return ONLY valid JSON, no markdown, no extra text
+
+Example warning signal: "Replies are short and unenthusiastic - mostly one-word answers like 'ok' and 'cool' with no follow-up questions"
+Example positive signal: "Makes specific plans to see you and remembers important details from previous conversations"`;
+
+    const imageContent = images.map(base64Image => ({
       type: 'image_url',
       image_url: {
-        url: `data:image/jpeg;base64,${img}`,
-      },
+        url: `data:image/jpeg;base64,${base64Image}`
+      }
     }));
 
-    const response = await openai.chat.completions.create({
+    const completion = await openai.chat.completions.create({
       model: 'gpt-4o',
       messages: [
         {
           role: 'system',
-          content: `You are analyzing chat screenshots to provide observable relationship behavior insights. Be objective and factual. Output ONLY valid JSON in this exact format:
-
-{
-  "messageBalance": {
-    "you": <number>,
-    "them": <number>
-  },
-  "engagementLevel": <number 0-100>,
-  "warningSignals": [
-    "brief observable pattern 1",
-    "brief observable pattern 2",
-    "brief observable pattern 3"
-  ],
-  "positiveSignals": [
-    "brief observable pattern 1",
-    "brief observable pattern 2",
-    "brief observable pattern 3"
-  ],
-  "compatibilityScore": <number 0-100>
-}
-
-RULES:
-- Count visible messages from both participants
-- Engagement level based on: response frequency, message length, effort shown
-- Warning signals: concerning patterns you observe
-- Positive signals: healthy patterns you observe
-- Compatibility score: derived from message balance, engagement, and patterns
-- Keep all descriptions brief and observational (5-10 words max)
-- Do NOT assume intent or emotions beyond what's visible
-- Be neutral and non-accusatory
-
-Output ONLY the JSON. No extra text.`,
+          content: systemPrompt
         },
         {
           role: 'user',
           content: [
-            { type: 'text', text: 'Analyze these chat screenshots and provide relationship insights.' },
-            ...imageContents,
-          ],
-        },
+            {
+              type: 'text',
+              text: 'Analyze these chat screenshots and return the JSON analysis.'
+            },
+            ...imageContent
+          ]
+        }
       ],
+      temperature: 0.7,
+      max_tokens: 1000,
     });
 
-    const reply = response.choices[0].message.content || '';
-    const jsonMatch = reply.match(/\{[\s\S]*\}/);
+    const reply = completion.choices[0].message.content;
 
-    if (jsonMatch) {
-      res.json(JSON.parse(jsonMatch[0]));
-    } else {
-      res.status(500).json({ error: 'Invalid response format' });
+    let analysis;
+    try {
+      const cleanedReply = reply.replace(/```json\n?|\n?```/g, '').trim();
+      analysis = JSON.parse(cleanedReply);
+    } catch (parseError) {
+      console.error('JSON parse error:', parseError);
+      console.error('Raw reply:', reply);
+      analysis = {
+        messageBalance: { you: 0, them: 0 },
+        engagementLevel: 50,
+        warningSignals: ['Unable to analyze chat clearly'],
+        positiveSignals: ['Analysis incomplete'],
+        compatibilityScore: 50
+      };
     }
+
+    res.json(analysis);
   } catch (error) {
-    console.error(error);
+    console.error('Red flag analysis error:', error);
     res.status(500).json({ error: 'Failed to analyze chats' });
   }
 });
 
-// Chat Endpoint
-app.post('/chat', async (req, res) => {
-  try {
-    const { messages } = req.body;
-
-    const response = await openai.chat.completions.create({
-      model: 'gpt-4o',
-      messages: [
-        {
-          role: 'system',
-          content: `You are Loyalty AI, a helpful and supportive assistant for relationship advice and self-improvement. You're friendly, understanding, and give practical advice. Keep responses conversational, supportive, and concise (2-4 sentences). Use a warm, encouraging tone.`,
-        },
-        ...messages,
-      ],
-    });
-
-    res.json({ reply: response.choices[0].message.content });
-  } catch (error) {
-    console.error(error);
-    res.status(500).json({ error: 'Failed to generate response' });
-  }
-});
-
 app.listen(PORT, () => {
-  console.log(`🚀 Server running on http://localhost:${PORT}`);
-}); 
+  console.log(`Telr AI Backend running on port ${PORT}`);
+});
