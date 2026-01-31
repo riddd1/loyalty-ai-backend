@@ -10,8 +10,69 @@ const openai = new OpenAI({
   apiKey: process.env.OPENAI_API_KEY,
 });
 
+const REVENUECAT_API_KEY = process.env.REVENUECAT_API_KEY;
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
+
+// ========================================
+// REVENUECAT VERIFICATION
+// ========================================
+async function verifySubscription(userId) {
+  try {
+    const response = await fetch(`https://api.revenuecat.com/v1/subscribers/${userId}`, {
+      headers: {
+        'Authorization': `Bearer ${REVENUECAT_API_KEY}`,
+      },
+    });
+
+    const data = await response.json();
+    
+    // Check if user has active "premium" entitlement
+    return data.subscriber?.entitlements?.premium?.expires_date 
+      ? new Date(data.subscriber.entitlements.premium.expires_date) > new Date()
+      : false;
+  } catch (error) {
+    console.error('RevenueCat verification error:', error);
+    return false;
+  }
+}
+
+// ========================================
+// USAGE TRACKING
+// ========================================
+// In-memory usage tracking (resets on server restart)
+// TODO: Replace with database for production
+const usageTracker = {
+  chat: {},
+  loyaltyTest: {},
+  redFlag: {},
+};
+
+const LIMITS = {
+  chat: 100,
+  loyaltyTest: 100,
+  redFlag: 50,
+};
+
+function trackUsage(userId, feature) {
+  const currentMonth = new Date().toISOString().slice(0, 7); // "2026-01"
+  const key = `${userId}-${currentMonth}`;
+  
+  if (!usageTracker[feature][key]) {
+    usageTracker[feature][key] = 0;
+  }
+  
+  usageTracker[feature][key]++;
+}
+
+function checkUsage(userId, feature) {
+  const currentMonth = new Date().toISOString().slice(0, 7);
+  const key = `${userId}-${currentMonth}`;
+  const usage = usageTracker[feature][key] || 0;
+  
+  return usage < LIMITS[feature];
+}
 
 // Health check
 app.get('/', (req, res) => {
@@ -23,10 +84,26 @@ app.get('/', (req, res) => {
 // ========================================
 app.post('/chat', async (req, res) => {
   try {
-    const { messages } = req.body;
+    const { messages, userId } = req.body;
 
     if (!messages || !Array.isArray(messages)) {
       return res.status(400).json({ error: 'Messages array is required' });
+    }
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Verify subscription
+    const hasSubscription = await verifySubscription(userId);
+    if (!hasSubscription) {
+      return res.status(403).json({ error: 'Subscription required' });
+    }
+
+    // Check usage limit
+    const canUse = checkUsage(userId, 'chat');
+    if (!canUse) {
+      return res.status(429).json({ error: 'Monthly limit reached' });
     }
 
     const systemPrompt = `You are Telr AI, a compassionate and honest relationship advisor specializing in helping people who:
@@ -75,6 +152,9 @@ Examples of your tone:
 
     const reply = completion.choices[0].message.content;
 
+    // Track usage AFTER successful response
+    trackUsage(userId, 'chat');
+
     res.json({ reply });
   } catch (error) {
     console.error('Chat error:', error);
@@ -87,10 +167,26 @@ Examples of your tone:
 // ========================================
 app.post('/loyalty-test', async (req, res) => {
   try {
-    const { base64Image } = req.body;
+    const { base64Image, userId } = req.body;
 
     if (!base64Image) {
       return res.status(400).json({ error: 'Image is required' });
+    }
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Verify subscription
+    const hasSubscription = await verifySubscription(userId);
+    if (!hasSubscription) {
+      return res.status(403).json({ error: 'Subscription required' });
+    }
+
+    // Check usage limit
+    const canUse = checkUsage(userId, 'loyaltyTest');
+    if (!canUse) {
+      return res.status(429).json({ error: 'Monthly limit reached' });
     }
 
     const systemPrompt = `You are Telr AI's loyalty test message generator. Your job is to create realistic, tempting messages that test if someone would be disloyal.
@@ -161,6 +257,9 @@ Important rules:
 
     const reply = completion.choices[0].message.content;
 
+    // Track usage AFTER successful response
+    trackUsage(userId, 'loyaltyTest');
+
     res.json({ reply });
   } catch (error) {
     console.error('Loyalty test error:', error);
@@ -173,10 +272,26 @@ Important rules:
 // ========================================
 app.post('/red-flag', async (req, res) => {
   try {
-    const { images } = req.body;
+    const { images, userId } = req.body;
 
     if (!images || !Array.isArray(images) || images.length === 0) {
       return res.status(400).json({ error: 'At least one image is required' });
+    }
+
+    if (!userId) {
+      return res.status(400).json({ error: 'User ID is required' });
+    }
+
+    // Verify subscription
+    const hasSubscription = await verifySubscription(userId);
+    if (!hasSubscription) {
+      return res.status(403).json({ error: 'Subscription required' });
+    }
+
+    // Check usage limit
+    const canUse = checkUsage(userId, 'redFlag');
+    if (!canUse) {
+      return res.status(429).json({ error: 'Monthly limit reached' });
     }
 
     const systemPrompt = `You are Telr AI's relationship analyzer. You analyze chat screenshots to detect signs of cheating, lying, manipulation, and overall relationship health.
@@ -295,6 +410,9 @@ Example positive signal: "Makes specific plans to see you and remembers importan
         compatibilityScore: 50
       };
     }
+
+    // Track usage AFTER successful response
+    trackUsage(userId, 'redFlag');
 
     res.json(analysis);
   } catch (error) {
