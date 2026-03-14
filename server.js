@@ -12,7 +12,6 @@ const openai = new OpenAI({
 
 const REVENUECAT_API_KEY = process.env.REVENUECAT_API_KEY;
 
-// Creator codes — each code maps to a tester
 const CREATOR_CODES = {
   'EMILY001': 'emily',
   'KAYLA002': 'kayla',
@@ -25,13 +24,8 @@ const CREATOR_CODES = {
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
 
-// In-memory message store
-// { [testerId]: { [userId]: [ { id, role, content, type, timestamp, read } ] } }
 const messageStore = {};
 
-// ========================================
-// REVENUECAT VERIFICATION
-// ========================================
 async function verifySubscription(userId) {
   try {
     const response = await fetch(`https://api.revenuecat.com/v1/subscribers/${userId}`, {
@@ -49,9 +43,6 @@ async function verifySubscription(userId) {
   }
 }
 
-// ========================================
-// USAGE TRACKING
-// ========================================
 const usageTracker = { chat: {}, loyaltyTest: {}, redFlag: {} };
 const LIMITS = { chat: 100, loyaltyTest: 100, redFlag: 50 };
 
@@ -68,7 +59,6 @@ function checkUsage(userId, feature) {
   return (usageTracker[feature][key] || 0) < LIMITS[feature];
 }
 
-// Health check
 app.get('/', (req, res) => {
   res.json({ status: 'Telr AI Backend Running' });
 });
@@ -154,7 +144,7 @@ app.post('/creator/conversations', (req, res) => {
   const result = Object.entries(conversations).map(([userId, messages]) => ({
     userId,
     lastMessage: messages[messages.length - 1] || null,
-    unreadCount: (messages as any[]).filter((m: any) => m.role === 'user' && !m.read).length,
+    unreadCount: messages.filter(m => m.role === 'user' && !m.read).length,
     messageCount: messages.length,
   }));
 
@@ -172,7 +162,7 @@ app.post('/creator/conversation', (req, res) => {
   const messages = messageStore[testerId]?.[userId] || [];
 
   if (messageStore[testerId]?.[userId]) {
-    messageStore[testerId][userId] = messageStore[testerId][userId].map((m: any) =>
+    messageStore[testerId][userId] = messageStore[testerId][userId].map(m =>
       m.role === 'user' ? { ...m, read: true } : m
     );
   }
@@ -380,7 +370,7 @@ RULES:
 - Give 2-4 items in each signals array
 - Return ONLY valid JSON, no markdown, no extra text`;
 
-    const imageContent = images.map((base64Image: string) => ({
+    const imageContent = images.map(base64Image => ({
       type: 'image_url',
       image_url: { url: `data:image/jpeg;base64,${base64Image}` }
     }));
@@ -421,7 +411,6 @@ RULES:
 app.listen(PORT, () => {
   console.log(`Telr AI Backend running on port ${PORT}`);
 });
-
 
 // require('dotenv').config();
 // const express = require('express');
