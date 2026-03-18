@@ -104,6 +104,17 @@ app.get('/messages/:testerId/:userId', (req, res) => {
   res.json({ messages });
 });
 
+app.post('/messages/delete', (req, res) => {
+  const { userId, testerId } = req.body;
+  if (!userId || !testerId) {
+    return res.status(400).json({ error: 'userId and testerId required' });
+  }
+  if (messageStore[testerId]?.[userId]) {
+    messageStore[testerId][userId] = [];
+  }
+  res.json({ success: true });
+});
+
 // ── Creator ───────────────────────────────────────────
 app.post('/creator/all-conversations', (req, res) => {
   const { creatorCode } = req.body;
