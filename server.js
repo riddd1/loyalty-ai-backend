@@ -3,12 +3,12 @@ const express = require('express');
 const cors = require('cors');
 const OpenAI = require('openai');
 const cloudinary = require('cloudinary').v2;
+const { Pool } = require('pg');
 
 const app = express();
 const PORT = process.env.PORT || 3000;
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
-const REVENUECAT_API_KEY = process.env.REVENUECAT_API_KEY;
 const CREATOR_MASTER_CODE = 'TELRCREATOR2025';
 
 cloudinary.config({
@@ -17,26 +17,34 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+const pool = new Pool({
+  connectionString: process.env.DATABASE_URL,
+  ssl: { rejectUnauthorized: false },
+});
+
+// Create table if it doesn't exist
+async function initDB() {
+  await pool.query(`
+    CREATE TABLE IF NOT EXISTS messages (
+      id TEXT PRIMARY KEY,
+      tester_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      role TEXT NOT NULL,
+      content TEXT NOT NULL,
+      type TEXT DEFAULT 'text',
+      timestamp TIMESTAMPTZ DEFAULT NOW(),
+      read BOOLEAN DEFAULT FALSE
+    );
+    CREATE INDEX IF NOT EXISTS idx_messages_tester_user ON messages(tester_id, user_id);
+    CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
+  `);
+  console.log('Database initialized');
+}
+
+initDB().catch(console.error);
+
 app.use(cors());
 app.use(express.json({ limit: '50mb' }));
-
-const messageStore = {};
-
-async function verifySubscription(userId) {
-  try {
-    const response = await fetch(`https://api.revenuecat.com/v1/subscribers/${userId}`, {
-      headers: { 'Authorization': `Bearer ${REVENUECAT_API_KEY}` },
-    });
-    const data = await response.json();
-    const entitlements = data.subscriber?.entitlements || {};
-    return Object.values(entitlements).some(
-      e => e.expires_date && new Date(e.expires_date) > new Date()
-    );
-  } catch (error) {
-    console.error('RevenueCat verification error:', error);
-    return false;
-  }
-}
 
 const usageTracker = { chat: {}, loyaltyTest: {}, redFlag: {} };
 const LIMITS = { chat: 100, loyaltyTest: 100, redFlag: 50 };
@@ -63,12 +71,10 @@ app.post('/upload-image', async (req, res) => {
   try {
     const { base64Image } = req.body;
     if (!base64Image) return res.status(400).json({ error: 'Image required' });
-
     const result = await cloudinary.uploader.upload(
       `data:image/jpeg;base64,${base64Image}`,
       { folder: 'telr-ai-chats', resource_type: 'image' }
     );
-
     res.json({ url: result.secure_url });
   } catch (error) {
     console.error('Upload error:', error);
@@ -77,99 +83,154 @@ app.post('/upload-image', async (req, res) => {
 });
 
 // ── Messages ──────────────────────────────────────────
-app.post('/messages/send', (req, res) => {
+app.post('/messages/send', async (req, res) => {
   const { userId, testerId, content, type = 'text' } = req.body;
   if (!userId || !testerId || !content) {
     return res.status(400).json({ error: 'userId, testerId, content required' });
   }
-  if (!messageStore[testerId]) messageStore[testerId] = {};
-  if (!messageStore[testerId][userId]) messageStore[testerId][userId] = [];
-
-  const message = {
-    id: Date.now().toString(),
-    role: 'user',
-    content,
-    type,
-    timestamp: new Date().toISOString(),
-    read: false,
-  };
-
-  messageStore[testerId][userId].push(message);
-  res.json({ success: true, message });
+  try {
+    const id = Date.now().toString();
+    const timestamp = new Date().toISOString();
+    await pool.query(
+      `INSERT INTO messages (id, tester_id, user_id, role, content, type, timestamp, read)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [id, testerId, userId, 'user', content, type, timestamp, false]
+    );
+    const message = { id, role: 'user', content, type, timestamp, read: false };
+    res.json({ success: true, message });
+  } catch (error) {
+    console.error('Send message error:', error);
+    res.status(500).json({ error: 'Failed to send message' });
+  }
 });
 
-app.get('/messages/:testerId/:userId', (req, res) => {
+app.get('/messages/:testerId/:userId', async (req, res) => {
   const { testerId, userId } = req.params;
-  const messages = messageStore[testerId]?.[userId] || [];
-  res.json({ messages });
+  try {
+    const result = await pool.query(
+      `SELECT * FROM messages WHERE tester_id = $1 AND user_id = $2 ORDER BY timestamp ASC`,
+      [testerId, userId]
+    );
+    const messages = result.rows.map(row => ({
+      id: row.id,
+      role: row.role,
+      content: row.content,
+      type: row.type,
+      timestamp: row.timestamp,
+      read: row.read,
+    }));
+    res.json({ messages });
+  } catch (error) {
+    console.error('Get messages error:', error);
+    res.status(500).json({ error: 'Failed to get messages' });
+  }
 });
 
 // ── Creator ───────────────────────────────────────────
-app.post('/creator/all-conversations', (req, res) => {
+app.post('/creator/all-conversations', async (req, res) => {
   const { creatorCode } = req.body;
   if (creatorCode !== CREATOR_MASTER_CODE) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
+  try {
+    const result = await pool.query(`
+      SELECT DISTINCT ON (tester_id, user_id)
+        tester_id, user_id,
+        id, role, content, type, timestamp, read
+      FROM messages
+      ORDER BY tester_id, user_id, timestamp DESC
+    `);
 
-  const result = [];
-  Object.entries(messageStore).forEach(([testerId, conversations]) => {
-    Object.entries(conversations).forEach(([userId, messages]) => {
-      result.push({
-        testerId,
-        userId,
-        lastMessage: messages[messages.length - 1] || null,
-        unreadCount: messages.filter(m => m.role === 'user' && !m.read).length,
-        messageCount: messages.length,
-      });
+    const convMap = {};
+    result.rows.forEach(row => {
+      const key = `${row.tester_id}:${row.user_id}`;
+      if (!convMap[key]) {
+        convMap[key] = {
+          testerId: row.tester_id,
+          userId: row.user_id,
+          lastMessage: { id: row.id, role: row.role, content: row.content, type: row.type, timestamp: row.timestamp },
+          unreadCount: 0,
+          messageCount: 0,
+        };
+      }
     });
-  });
 
-  result.sort((a, b) => {
-    const aTime = a.lastMessage?.timestamp || '';
-    const bTime = b.lastMessage?.timestamp || '';
-    return bTime.localeCompare(aTime);
-  });
+    const unreadResult = await pool.query(`
+      SELECT tester_id, user_id, COUNT(*) as count
+      FROM messages WHERE role = 'user' AND read = false
+      GROUP BY tester_id, user_id
+    `);
+    unreadResult.rows.forEach(row => {
+      const key = `${row.tester_id}:${row.user_id}`;
+      if (convMap[key]) convMap[key].unreadCount = parseInt(row.count);
+    });
 
-  res.json({ conversations: result });
+    const countResult = await pool.query(`
+      SELECT tester_id, user_id, COUNT(*) as count
+      FROM messages GROUP BY tester_id, user_id
+    `);
+    countResult.rows.forEach(row => {
+      const key = `${row.tester_id}:${row.user_id}`;
+      if (convMap[key]) convMap[key].messageCount = parseInt(row.count);
+    });
+
+    const conversations = Object.values(convMap).sort((a, b) => {
+      const aTime = a.lastMessage?.timestamp || '';
+      const bTime = b.lastMessage?.timestamp || '';
+      return bTime.localeCompare(aTime);
+    });
+
+    res.json({ conversations });
+  } catch (error) {
+    console.error('All conversations error:', error);
+    res.status(500).json({ error: 'Failed to get conversations' });
+  }
 });
 
-app.post('/creator/conversation', (req, res) => {
+app.post('/creator/conversation', async (req, res) => {
   const { creatorCode, userId, testerId } = req.body;
   if (creatorCode !== CREATOR_MASTER_CODE) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-
-  const messages = messageStore[testerId]?.[userId] || [];
-
-  if (messageStore[testerId]?.[userId]) {
-    messageStore[testerId][userId] = messageStore[testerId][userId].map(m =>
-      m.role === 'user' ? { ...m, read: true } : m
+  try {
+    const result = await pool.query(
+      `SELECT * FROM messages WHERE tester_id = $1 AND user_id = $2 ORDER BY timestamp ASC`,
+      [testerId, userId]
     );
+    await pool.query(
+      `UPDATE messages SET read = true WHERE tester_id = $1 AND user_id = $2 AND role = 'user'`,
+      [testerId, userId]
+    );
+    const messages = result.rows.map(row => ({
+      id: row.id, role: row.role, content: row.content,
+      type: row.type, timestamp: row.timestamp, read: row.read,
+    }));
+    res.json({ messages, testerId, userId });
+  } catch (error) {
+    console.error('Get conversation error:', error);
+    res.status(500).json({ error: 'Failed to get conversation' });
   }
-
-  res.json({ messages, testerId, userId });
 });
 
-app.post('/creator/reply', (req, res) => {
+app.post('/creator/reply', async (req, res) => {
   const { creatorCode, userId, testerId, content, type = 'text' } = req.body;
   if (creatorCode !== CREATOR_MASTER_CODE) {
     return res.status(401).json({ error: 'Unauthorized' });
   }
-
-  if (!messageStore[testerId]) messageStore[testerId] = {};
-  if (!messageStore[testerId][userId]) messageStore[testerId][userId] = [];
-
-  const message = {
-    id: Date.now().toString(),
-    role: 'tester',
-    content,
-    type,
-    timestamp: new Date().toISOString(),
-    read: true,
-  };
-
-  messageStore[testerId][userId].push(message);
-  res.json({ success: true, message });
+  try {
+    const id = Date.now().toString();
+    const timestamp = new Date().toISOString();
+    await pool.query(
+      `INSERT INTO messages (id, tester_id, user_id, role, content, type, timestamp, read)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)`,
+      [id, testerId, userId, 'tester', content, type, timestamp, true]
+    );
+    const message = { id, role: 'tester', content, type, timestamp, read: true };
+    res.json({ success: true, message });
+  } catch (error) {
+    console.error('Reply error:', error);
+    res.status(500).json({ error: 'Failed to send reply' });
+  }
 });
 
 // ── Chat ──────────────────────────────────────────────
