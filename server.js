@@ -17,6 +17,7 @@ cloudinary.config({
   api_secret: process.env.CLOUDINARY_API_SECRET,
 });
 
+
 const pool = new Pool({
   connectionString: process.env.DATABASE_URL,
   ssl: { rejectUnauthorized: false },
@@ -37,6 +38,10 @@ async function initDB() {
     );
     CREATE INDEX IF NOT EXISTS idx_messages_tester_user ON messages(tester_id, user_id);
     CREATE INDEX IF NOT EXISTS idx_messages_timestamp ON messages(timestamp DESC);
+  `);
+  // Migration: add `read` column if the table was created before it existed
+  await pool.query(`
+    ALTER TABLE messages ADD COLUMN IF NOT EXISTS read BOOLEAN DEFAULT FALSE;
   `);
   console.log('Database initialized');
 }
@@ -197,14 +202,15 @@ app.post('/creator/conversation', async (req, res) => {
       `SELECT * FROM messages WHERE tester_id = $1 AND user_id = $2 ORDER BY timestamp ASC`,
       [testerId, userId]
     );
-    await pool.query(
-      `UPDATE messages SET read = true WHERE tester_id = $1 AND user_id = $2 AND role = 'user'`,
-      [testerId, userId]
-    );
     const messages = result.rows.map(row => ({
       id: row.id, role: row.role, content: row.content,
       type: row.type, timestamp: row.timestamp, read: row.read,
     }));
+    // Mark as read separately — never let this block the response
+    pool.query(
+      `UPDATE messages SET read = true WHERE tester_id = $1 AND user_id = $2 AND role = 'user'`,
+      [testerId, userId]
+    ).catch(e => console.error('Mark-read error:', e));
     res.json({ messages, testerId, userId });
   } catch (error) {
     console.error('Get conversation error:', error);
@@ -456,6 +462,34 @@ RULES:
     console.error('Red flag analysis error:', error);
     res.status(500).json({ error: 'Failed to analyze chats' });
   }
+});
+
+// ── Delete conversation ───────────────────────────────
+app.post('/messages/delete', async (req, res) => {
+  const { userId, testerId } = req.body;
+  if (!userId || !testerId) return res.status(400).json({ error: 'userId and testerId required' });
+  try {
+    await pool.query(
+      `DELETE FROM messages WHERE tester_id = $1 AND user_id = $2`,
+      [testerId, userId]
+    );
+    res.json({ success: true });
+  } catch (error) {
+    console.error('Delete conversation error:', error);
+    res.status(500).json({ error: 'Failed to delete conversation' });
+  }
+});
+
+// ── Payment notification ──────────────────────────────
+app.post('/notify', async (req, res) => {
+  const { plan, hisHandle, hisPlatform, hisDescription, userName } = req.body;
+  console.log('=== NEW PAYMENT ===');
+  console.log(`Plan: ${plan}`);
+  console.log(`User: ${userName}`);
+  console.log(`His handle: @${hisHandle} (${hisPlatform})`);
+  console.log(`Description: ${hisDescription}`);
+  console.log('==================');
+  res.json({ success: true });
 });
 
 app.listen(PORT, () => {
