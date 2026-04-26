@@ -197,9 +197,9 @@ app.post('/creator/all-conversations', async (req, res) => {
     });
 
     const conversations = Object.values(convMap).sort((a, b) => {
-      const aTime = a.lastMessage?.timestamp || '';
-      const bTime = b.lastMessage?.timestamp || '';
-      return bTime.localeCompare(aTime);
+      const aTime = a.lastMessage?.timestamp ? new Date(a.lastMessage.timestamp).getTime() : 0;
+      const bTime = b.lastMessage?.timestamp ? new Date(b.lastMessage.timestamp).getTime() : 0;
+      return bTime - aTime;
     });
 
     res.json({ conversations });
