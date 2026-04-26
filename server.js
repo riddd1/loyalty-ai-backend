@@ -5,7 +5,6 @@ const OpenAI = require('openai');
 const cloudinary = require('cloudinary').v2;
 const { Pool } = require('pg');
 
-
 const app = express();
 const PORT = process.env.PORT || 3000;
 
@@ -161,15 +160,18 @@ app.post('/creator/all-conversations', async (req, res) => {
       }
     });
 
-    const unreadResult = await pool.query(`
-      SELECT tester_id, user_id, COUNT(*) as count
-      FROM messages WHERE role = 'user' AND read = false
-      GROUP BY tester_id, user_id
-    `);
-    unreadResult.rows.forEach(row => {
-      const key = `${row.tester_id}:${row.user_id}`;
-      if (convMap[key]) convMap[key].unreadCount = parseInt(row.count);
-    });
+    // Unread count requires `read` column — skip gracefully if it doesn't exist yet
+    try {
+      const unreadResult = await pool.query(`
+        SELECT tester_id, user_id, COUNT(*) as count
+        FROM messages WHERE role = 'user' AND read = false
+        GROUP BY tester_id, user_id
+      `);
+      unreadResult.rows.forEach(row => {
+        const key = `${row.tester_id}:${row.user_id}`;
+        if (convMap[key]) convMap[key].unreadCount = parseInt(row.count);
+      });
+    } catch (_) {}
 
     const countResult = await pool.query(`
       SELECT tester_id, user_id, COUNT(*) as count
