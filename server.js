@@ -71,6 +71,20 @@ app.get('/', (req, res) => {
   res.json({ status: 'Telr AI Backend Running' });
 });
 
+app.get('/health', async (req, res) => {
+  try {
+    const result = await pool.query(`SELECT COUNT(*) as count FROM messages`);
+    const cols = await pool.query(`SELECT column_name FROM information_schema.columns WHERE table_name = 'messages'`);
+    res.json({
+      db: 'connected',
+      messageCount: parseInt(result.rows[0].count),
+      columns: cols.rows.map(r => r.column_name),
+    });
+  } catch (e) {
+    res.json({ db: 'error', error: e.message });
+  }
+});
+
 // ── Image Upload ──────────────────────────────────────
 app.post('/upload-image', async (req, res) => {
   try {
